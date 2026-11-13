@@ -25,6 +25,7 @@ type preparedSpan struct {
 	CrossfadeFrames  int64
 	GainDB           float64
 	ChannelAction    string
+	Spatial          *domain.SpatialProcess
 	Clip             *audiocodec.Clip
 }
 
@@ -89,6 +90,7 @@ func prepareSpans(
 			CrossfadeFrames:  span.CrossfadeFrames,
 			GainDB:           span.GainDB,
 			ChannelAction:    action,
+			Spatial:          span.Spatial,
 			Clip:             mapped,
 		})
 	}

@@ -55,10 +55,33 @@ func (s *Service) CreateTimeline(ctx context.Context, id string, request Timelin
 		}
 		sources[span.SourceID] = asset
 	}
-	if err := domain.ValidateTimeline(candidate, sources, s.config.MaxSpans, s.config.MaxOutputFrames); err != nil {
+	impulses := make(map[string]domain.ImpulseAsset)
+	for index, span := range candidate.Spans {
+		if span.Spatial == nil {
+			continue
+		}
+		if _, exists := impulses[span.Spatial.ImpulseID]; exists {
+			continue
+		}
+		asset, err := s.repo.GetImpulseMeta(span.Spatial.ImpulseID)
+		if err != nil {
+			if appErr := domain.AsAppError(err); appErr.Kind == domain.KindNotFound {
+				return domain.Timeline{}, false, domain.E(
+					domain.KindInvalid,
+					"impulse_not_found",
+					fmt.Sprintf("spans[%d].spatial.impulse_id", index),
+					"referenced impulse response does not exist",
+				)
+			}
+			return domain.Timeline{}, false, err
+		}
+		impulses[span.Spatial.ImpulseID] = asset
+	}
+	if err := domain.ValidateTimeline(candidate, sources, impulses, s.config.MaxSpans, s.config.MaxOutputFrames); err != nil {
 		return domain.Timeline{}, false, err
 	}
 	candidate.OutputFrames = domain.TimelineOutputFrames(candidate, sources)
+	candidate.ProjectedFrames = domain.TimelineProjectedFrames(candidate, sources, impulses)
 	candidate.State = "ready"
 	candidate.CreatedAt = time.Now().UTC()
 	if err := s.repo.SaveTimeline(candidate); err != nil {
@@ -82,9 +105,19 @@ func equivalentTimeline(left, right domain.Timeline) bool {
 			a.SourceStartFrame != b.SourceStartFrame ||
 			a.SourceEndFrame != b.SourceEndFrame ||
 			math.Abs(a.GainDB-b.GainDB) > 1e-9 ||
-			a.CrossfadeFrames != b.CrossfadeFrames {
+			a.CrossfadeFrames != b.CrossfadeFrames ||
+			!equivalentSpatial(a.Spatial, b.Spatial) {
 			return false
 		}
 	}
 	return true
+}
+
+func equivalentSpatial(left, right *domain.SpatialProcess) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.ImpulseID == right.ImpulseID &&
+		math.Abs(left.WetGainDB-right.WetGainDB) <= 1e-9 &&
+		math.Abs(left.DryGainDB-right.DryGainDB) <= 1e-9
 }

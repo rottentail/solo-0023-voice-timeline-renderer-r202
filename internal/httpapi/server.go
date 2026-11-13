@@ -41,6 +41,8 @@ func (server *Server) routes() {
 	server.router.HandleFunc("GET /healthz", server.handleHealth)
 	server.router.HandleFunc("PUT /v1/sources/{id}", server.handleSourceWrite)
 	server.router.HandleFunc("GET /v1/sources/{id}", server.handleSourceRead)
+	server.router.HandleFunc("PUT /v1/impulses/{id}", server.handleImpulseWrite)
+	server.router.HandleFunc("GET /v1/impulses/{id}", server.handleImpulseRead)
 	server.router.HandleFunc("PUT /v1/timelines/{id}", server.handleTimelineWrite)
 	server.router.HandleFunc("GET /v1/timelines/{id}", server.handleTimelineRead)
 	server.router.HandleFunc("PUT /v1/renders/{id}", server.handleRenderWrite)

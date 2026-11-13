@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"voice-timeline-renderer/internal/domain"
@@ -66,19 +67,46 @@ func (s *Service) CreateRender(
 		}
 		sources[span.SourceID] = render.SourceInput{Asset: asset, WAV: payload}
 	}
+	impulses := make(map[string]render.ImpulseInput)
+	for _, span := range plan.Spans {
+		if span.Spatial == nil {
+			continue
+		}
+		if _, loaded := impulses[span.Spatial.ImpulseID]; loaded {
+			continue
+		}
+		asset, payload, loadErr := s.repo.GetImpulse(span.Spatial.ImpulseID)
+		if loadErr != nil {
+			return s.failRender(job, loadErr)
+		}
+		impulses[span.Spatial.ImpulseID] = render.ImpulseInput{Asset: asset, WAV: payload}
+	}
+	// Once the request is canceled the render must stop processing and must
+	// never reach artifact publication; CommitRenderArtifacts is therefore
+	// unreachable with a canceled context.
+	if err := ctx.Err(); err != nil {
+		return s.failRender(job, domain.Wrap(domain.KindConflict, "render_canceled", "render_id", "the render was canceled before completion", err))
+	}
 	result, renderErr := render.Render(
 		ctx,
 		id,
 		plan,
 		sources,
+		impulses,
 		render.Limits{MaxOutputFrames: s.config.MaxOutputFrames},
 		time.Now().UTC(),
 	)
 	if renderErr != nil {
+		if errors.Is(renderErr, context.Canceled) || errors.Is(renderErr, context.DeadlineExceeded) {
+			return s.failRender(job, domain.Wrap(domain.KindConflict, "render_canceled", "render_id", "the render was canceled before completion", renderErr))
+		}
 		return s.failRender(job, domain.Wrap(domain.KindInternal, "render_failed", "", "timeline rendering failed", renderErr))
 	}
 	if err := s.advanceJob(&job, domain.RenderFinalizing, nil); err != nil {
 		return job, true, err
+	}
+	if err := ctx.Err(); err != nil {
+		return s.failRender(job, domain.Wrap(domain.KindConflict, "render_canceled", "render_id", "the render was canceled before publication", err))
 	}
 	if err := s.repo.CommitRenderArtifacts(id, result.WAV, result.Receipt); err != nil {
 		return s.failRender(job, err)

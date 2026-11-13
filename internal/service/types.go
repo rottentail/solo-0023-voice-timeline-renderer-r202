@@ -11,6 +11,9 @@ type Repository interface {
 	SaveSource(domain.SourceAsset, []byte) error
 	GetSourceMeta(string) (domain.SourceAsset, error)
 	GetSource(string) (domain.SourceAsset, []byte, error)
+	SaveImpulse(domain.ImpulseAsset, []byte) error
+	GetImpulseMeta(string) (domain.ImpulseAsset, error)
+	GetImpulse(string) (domain.ImpulseAsset, []byte, error)
 	SaveTimeline(domain.Timeline) error
 	GetTimeline(string) (domain.Timeline, error)
 	SaveJob(domain.RenderJob) error
@@ -20,16 +23,22 @@ type Repository interface {
 }
 
 type Config struct {
-	MaxSourceBytes  int64
-	MaxSpans        int
-	MaxOutputFrames int64
+	MaxSourceBytes   int64
+	MaxImpulseBytes  int64
+	MaxImpulseFrames int64
+	MaxSpans         int
+	MaxOutputFrames  int64
 }
 
 func DefaultConfig() Config {
 	return Config{
 		MaxSourceBytes:  32 << 20,
-		MaxSpans:        64,
-		MaxOutputFrames: 48000 * 180,
+		MaxImpulseBytes: 32 << 20,
+		// Eight seconds at 48 kHz keeps long room responses usable while
+		// bounding convolution working sets and project tail growth.
+		MaxImpulseFrames: 48000 * 8,
+		MaxSpans:         64,
+		MaxOutputFrames:  48000 * 180,
 	}
 }
 
@@ -44,6 +53,12 @@ func New(repo Repository, config Config) *Service {
 	if config.MaxSourceBytes <= 0 {
 		config.MaxSourceBytes = defaults.MaxSourceBytes
 	}
+	if config.MaxImpulseBytes <= 0 {
+		config.MaxImpulseBytes = defaults.MaxImpulseBytes
+	}
+	if config.MaxImpulseFrames <= 0 {
+		config.MaxImpulseFrames = defaults.MaxImpulseFrames
+	}
 	if config.MaxSpans <= 0 {
 		config.MaxSpans = defaults.MaxSpans
 	}
@@ -54,6 +69,11 @@ func New(repo Repository, config Config) *Service {
 }
 
 type SourceWriteRequest struct {
+	Name      string `json:"name"`
+	WAVBase64 string `json:"wav_base64"`
+}
+
+type ImpulseWriteRequest struct {
 	Name      string `json:"name"`
 	WAVBase64 string `json:"wav_base64"`
 }
@@ -80,6 +100,13 @@ func (s *Service) GetSource(ctx context.Context, id string) (domain.SourceAsset,
 		return domain.SourceAsset{}, err
 	}
 	return s.repo.GetSourceMeta(id)
+}
+
+func (s *Service) GetImpulse(ctx context.Context, id string) (domain.ImpulseAsset, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ImpulseAsset{}, err
+	}
+	return s.repo.GetImpulseMeta(id)
 }
 
 func (s *Service) GetTimeline(ctx context.Context, id string) (domain.Timeline, error) {

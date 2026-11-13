@@ -36,6 +36,45 @@ func (harness *Harness) createSource(
 	return asset, status, nil
 }
 
+func (harness *Harness) createImpulse(
+	ctx context.Context,
+	id string,
+	name string,
+	wav []byte,
+) (domain.ImpulseAsset, int, error) {
+	status, body, err := harness.requestJSON(ctx, "PUT", "/v1/impulses/"+id, service.ImpulseWriteRequest{
+		Name:      name,
+		WAVBase64: base64.StdEncoding.EncodeToString(wav),
+	})
+	if err != nil {
+		return domain.ImpulseAsset{}, status, err
+	}
+	var asset domain.ImpulseAsset
+	if status == 200 || status == 201 {
+		if err := decodeBody(body, &asset); err != nil {
+			return domain.ImpulseAsset{}, status, err
+		}
+	}
+	return asset, status, nil
+}
+
+func (harness *Harness) getImpulse(
+	ctx context.Context,
+	id string,
+) (domain.ImpulseAsset, int, error) {
+	status, body, err := harness.requestJSON(ctx, "GET", "/v1/impulses/"+id, nil)
+	if err != nil {
+		return domain.ImpulseAsset{}, status, err
+	}
+	var asset domain.ImpulseAsset
+	if status == 200 {
+		if err := decodeBody(body, &asset); err != nil {
+			return domain.ImpulseAsset{}, status, err
+		}
+	}
+	return asset, status, nil
+}
+
 func (harness *Harness) getSource(
 	ctx context.Context,
 	id string,

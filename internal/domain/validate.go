@@ -51,7 +51,13 @@ func ValidateSourceFacts(field string, facts SourceFacts) error {
 	return nil
 }
 
-func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans int, maxOutputFrames int64) error {
+func ValidateTimeline(
+	plan Timeline,
+	sources map[string]SourceAsset,
+	impulses map[string]ImpulseAsset,
+	maxSpans int,
+	maxOutputFrames int64,
+) error {
 	if err := ValidateResourceID("timeline_id", plan.ID); err != nil {
 		return err
 	}
@@ -96,6 +102,9 @@ func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans in
 		if index == 0 && span.CrossfadeFrames != 0 {
 			return E(KindInvalid, "invalid_crossfade", field+".crossfade_frames", "the first span cannot crossfade")
 		}
+		if err := ValidateSpatialProcess(field+".spatial", span.Spatial, impulses); err != nil {
+			return err
+		}
 
 		outputFrames := ScaledFrames(span.SourceEndFrame-span.SourceStartFrame, source.SampleRate, plan.SampleRate)
 		if outputFrames < 1 {
@@ -116,6 +125,33 @@ func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans in
 		previousFrames = outputFrames
 		if cursor > maxOutputFrames {
 			return E(KindTooLarge, "timeline_too_long", "spans", "timeline output exceeds the configured frame limit")
+		}
+	}
+	projected := TimelineProjectedFrames(plan, sources, impulses)
+	if projected > maxOutputFrames {
+		return E(KindTooLarge, "timeline_too_long", "spans", "timeline output including convolution tails exceeds the configured frame limit")
+	}
+	return nil
+}
+
+// ValidateSpatialProcess checks a per-span convolution configuration. A nil
+// process means the span keeps the legacy gain/fade-only behavior.
+func ValidateSpatialProcess(field string, process *SpatialProcess, impulses map[string]ImpulseAsset) error {
+	if process == nil {
+		return nil
+	}
+	if err := ValidateResourceID(field+".impulse_id", process.ImpulseID); err != nil {
+		return err
+	}
+	if _, ok := impulses[process.ImpulseID]; !ok {
+		return E(KindInvalid, "impulse_not_found", field+".impulse_id", "referenced impulse response does not exist")
+	}
+	for gainField, value := range map[string]float64{
+		".wet_gain_db": process.WetGainDB,
+		".dry_gain_db": process.DryGainDB,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < -36 || value > 12 {
+			return E(KindInvalid, "invalid_gain", field+gainField, "spatial gain must be finite and between -36 and 12 dB")
 		}
 	}
 	return nil
@@ -139,6 +175,52 @@ func TimelineOutputFrames(plan Timeline, sources map[string]SourceAsset) int64 {
 		total -= span.CrossfadeFrames
 	}
 	return total
+}
+
+// TimelineProjectedFrames reports the frame count the render will produce,
+// including the full convolution tail of the final spatially processed span.
+// Linear convolution of N input frames with an M-frame response produces
+// N+M-1 frames, so a span contributes (responseFrames-1) tail frames after
+// its own dry content. Only the tail extending past the dry timeline grows
+// the project duration; tails overlapping later span audio are mixed into
+// the existing frames instead.
+func TimelineProjectedFrames(plan Timeline, sources map[string]SourceAsset, impulses map[string]ImpulseAsset) int64 {
+	dry := TimelineOutputFrames(plan, sources)
+	if dry <= 0 {
+		return 0
+	}
+	projected := dry
+	cursor := int64(0)
+	for index, span := range plan.Spans {
+		source, ok := sources[span.SourceID]
+		if !ok {
+			return 0
+		}
+		outputFrames := ScaledFrames(span.SourceEndFrame-span.SourceStartFrame, source.SampleRate, plan.SampleRate)
+		start := cursor
+		if index > 0 {
+			start -= span.CrossfadeFrames
+		}
+		cursor = start + outputFrames
+		if span.Spatial == nil {
+			continue
+		}
+		impulse, ok := impulses[span.Spatial.ImpulseID]
+		if !ok {
+			return 0
+		}
+		responseFrames := ScaledFrames(impulse.FrameCount, impulse.SampleRate, plan.SampleRate)
+		if responseFrames < 1 {
+			responseFrames = 1
+		}
+		// The span's convolution spans outputFrames+responseFrames-1 frames
+		// starting at `start`, so it occupies that many output frames.
+		spanWetFrames := start + outputFrames + responseFrames - 1
+		if spanWetFrames > projected {
+			projected = spanWetFrames
+		}
+	}
+	return projected
 }
 
 func intString(value int) string {
